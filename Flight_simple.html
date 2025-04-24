@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simple Flight Simulator</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: linear-gradient(to bottom, #87CEEB, #E0F7FA);
+            height: 100vh;
+            font-family: Arial, sans-serif;
+        }
+        
+        #gameCanvas {
+            display: block;
+            background-color: #87CEEB;
+        }
+        
+        #controls {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background-color: rgba(255, 255, 255, 0.7);
+            padding: 10px;
+            border-radius: 5px;
+        }
+        
+        #altitude {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background-color: rgba(255, 255, 255, 0.7);
+            padding: 10px;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div id="controls">
+        <h2>Flight Simulator</h2>
+        <p>Use arrow keys to control the plane</p>
+        <p>↑ - Pitch up</p>
+        <p>↓ - Pitch down</p>
+        <p>→ - Roll right</p>
+        <p>← - Roll left</p>
+    </div>
+    
+    <div id="altitude">
+        Altitude: <span id="altitudeValue">0</span> ft
+    </div>
+    
+    <canvas id="gameCanvas"></canvas>
+    
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const altitudeDisplay = document.getElementById('altitudeValue');
+        
+        // Set canvas size
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        
+        // Plane properties
+        const plane = {
+            x: canvas.width / 2,
+            y: canvas.height / 2,
+            width: 40,
+            height: 20,
+            speed: 3,
+            angle: 0,
+            altitude: 1000,
+            pitch: 0,
+            roll: 0
+        };
+        
+        // Cloud properties
+        const clouds = [];
+        const cloudCount = 15;
+        
+        for (let i = 0; i < cloudCount; i++) {
+            clouds.push({
+                x: Math.random() * canvas.width,
+                y: Math.random() * canvas.height * 0.7,
+                width: 50 + Math.random() * 100,
+                height: 30 + Math.random() * 50,
+                speed: 0.5 + Math.random() * 1.5
+            });
+        }
+        
+        // Key states
+        const keys = {
+            ArrowUp: false,
+            ArrowDown: false,
+            ArrowLeft: false,
+            ArrowRight: false
+        };
+        
+        // Event listeners for keyboard
+        window.addEventListener('keydown', (e) => {
+            if (keys.hasOwnProperty(e.key)) {
+                keys[e.key] = true;
+            }
+        });
+        
+        window.addEventListener('keyup', (e) => {
+            if (keys.hasOwnProperty(e.key)) {
+                keys[e.key] = false;
+            }
+        });
+        
+        // Game loop
+        function gameLoop() {
+            update();
+            render();
+            requestAnimationFrame(gameLoop);
+        }
+        
+        function update() {
+            // Update plane controls
+            if (keys.ArrowUp) plane.pitch = -2;
+            else if (keys.ArrowDown) plane.pitch = 2;
+            else plane.pitch *= 0.9;
+            
+            if (keys.ArrowLeft) plane.roll = -3;
+            else if (keys.ArrowRight) plane.roll = 3;
+            else plane.roll *= 0.9;
+            
+            // Update plane angle based on roll
+            plane.angle += plane.roll * 0.02;
+            
+            // Update plane position based on angle and pitch
+            plane.x += Math.sin(plane.angle) * plane.speed;
+            plane.y += plane.pitch * 0.5;
+            
+            // Update altitude based on pitch
+            plane.altitude += plane.pitch * 5;
+            if (plane.altitude < 0) plane.altitude = 0;
+            
+            // Wrap around screen edges
+            if (plane.x < 0) plane.x = canvas.width;
+            if (plane.x > canvas.width) plane.x = 0;
+            if (plane.y < 0) plane.y = canvas.height;
+            if (plane.y > canvas.height) plane.y = 0;
+            
+            // Update clouds
+            for (let cloud of clouds) {
+                cloud.x -= cloud.speed;
+                if (cloud.x + cloud.width < 0) {
+                    cloud.x = canvas.width;
+                    cloud.y = Math.random() * canvas.height * 0.7;
+                }
+            }
+            
+            // Update altitude display
+            altitudeDisplay.textContent = Math.floor(plane.altitude);
+        }
+        
+        function render() {
+            // Clear canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // Draw sky gradient
+            const skyGradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+            skyGradient.addColorStop(0, '#87CEEB');
+            skyGradient.addColorStop(1, '#E0F7FA');
+            ctx.fillStyle = skyGradient;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // Draw clouds
+            ctx.fillStyle = 'white';
+            for (let cloud of clouds) {
+                ctx.beginPath();
+                ctx.ellipse(cloud.x, cloud.y, cloud.width, cloud.height, 0, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            
+            // Draw ground (based on altitude)
+            const groundHeight = Math.min(100, 1000 / (plane.altitude / 100 + 1));
+            ctx.fillStyle = '#4CAF50';
+            ctx.fillRect(0, canvas.height - groundHeight, canvas.width, groundHeight);
+            
+            // Save context before transforming
+            ctx.save();
+            
+            // Move to plane position and rotate
+            ctx.translate(plane.x, plane.y);
+            ctx.rotate(plane.angle);
+            
+            // Draw plane
+            ctx.fillStyle = 'red';
+            ctx.beginPath();
+            ctx.moveTo(plane.width / 2, 0);
+            ctx.lineTo(-plane.width / 2, -plane.height / 2);
+            ctx.lineTo(-plane.width / 2, plane.height / 2);
+            ctx.closePath();
+            ctx.fill();
+            
+            // Draw wings
+            ctx.fillStyle = 'darkred';
+            ctx.fillRect(-plane.width / 4, -plane.height, plane.width / 2, plane.height * 1.5);
+            
+            // Restore context
+            ctx.restore();
+        }
+        
+        // Start the game
+        gameLoop();
+        
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        });
+    </script>
+</body>
+</html>

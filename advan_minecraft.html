@@ -1,0 +1,652 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Advanced WebCraft</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            font-family: 'Arial', sans-serif;
+            touch-action: none;
+        }
+        
+        #game-container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+        }
+        
+        #ui {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.5);
+            color: white;
+            padding: 10px;
+            border-radius: 5px;
+            z-index: 100;
+            pointer-events: none;
+        }
+        
+        #hotbar {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.5);
+            padding: 5px;
+            border-radius: 5px;
+            display: flex;
+            z-index: 100;
+        }
+        
+        .block-slot {
+            width: 50px;
+            height: 50px;
+            margin: 5px;
+            background: rgba(255, 255, 255, 0.2);
+            border: 2px solid transparent;
+            cursor: pointer;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 24px;
+            user-select: none;
+        }
+        
+        .block-slot.selected {
+            border-color: white;
+        }
+        
+        #loading-screen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: #000;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            font-size: 24px;
+            z-index: 200;
+        }
+        
+        #crosshair {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 20px;
+            height: 20px;
+            z-index: 99;
+            pointer-events: none;
+        }
+        
+        #crosshair::before, #crosshair::after {
+            content: '';
+            position: absolute;
+            background: white;
+            opacity: 0.8;
+        }
+        
+        #crosshair::before {
+            width: 2px;
+            height: 20px;
+            left: 9px;
+            top: 0;
+        }
+        
+        #crosshair::after {
+            width: 20px;
+            height: 2px;
+            left: 0;
+            top: 9px;
+        }
+        
+        #loading-progress {
+            width: 200px;
+            height: 10px;
+            background: rgba(255, 255, 255, 0.2);
+            margin-top: 20px;
+            border-radius: 5px;
+            overflow: hidden;
+        }
+        
+        #loading-bar {
+            height: 100%;
+            width: 0%;
+            background: white;
+            transition: width 0.3s;
+        }
+        
+        #debug-info {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: rgba(0, 0, 0, 0.5);
+            color: white;
+            padding: 10px;
+            border-radius: 5px;
+            font-family: monospace;
+            font-size: 12px;
+            z-index: 100;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <div id="loading-screen">
+            <div>Loading Advanced WebCraft...</div>
+            <div id="loading-progress"><div id="loading-bar"></div></div>
+        </div>
+        <div id="ui">
+            <div>Advanced WebCraft</div>
+            <div>WASD: Move | Space: Jump | Left Click: Place Block | Right Click: Remove Block</div>
+        </div>
+        <div id="hotbar">
+            <div class="block-slot selected" data-block="grass">🌿</div>
+            <div class="block-slot" data-block="dirt">🟫</div>
+            <div class="block-slot" data-block="stone">🪨</div>
+            <div class="block-slot" data-block="wood">🪵</div>
+            <div class="block-slot" data-block="sand">🟨</div>
+        </div>
+        <div id="crosshair"></div>
+        <div id="debug-info"></div>
+    </div>
+
+    <!-- Three.js libraries -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/PointerLockControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/TextureLoader.js"></script>
+
+    <script>
+        // Game variables
+        let scene, camera, renderer, controls;
+        let world = {};
+        let chunks = {};
+        let selectedBlock = 'grass';
+        let raycaster = new THREE.Raycaster();
+        let clock = new THREE.Clock();
+        let textureLoader = new THREE.TextureLoader();
+        let blockTextures = {};
+        let lastChunkUpdate = 0;
+        let playerVelocity = new THREE.Vector3();
+        let isGrounded = false;
+        
+        // Performance tracking
+        let fps = 0;
+        let lastFpsUpdate = 0;
+        let frameCount = 0;
+        
+        // Game settings
+        const settings = {
+            renderDistance: 4,
+            gravity: 0.05,
+            jumpForce: 0.15,
+            moveSpeed: 0.2,
+            chunkSize: 16,
+            worldHeight: 64
+        };
+        
+        // Block types
+        const blockTypes = {
+            grass: { name: 'Grass', transparent: false },
+            dirt: { name: 'Dirt', transparent: false },
+            stone: { name: 'Stone', transparent: false },
+            wood: { name: 'Wood', transparent: false },
+            sand: { name: 'Sand', transparent: false },
+            leaves: { name: 'Leaves', transparent: true }
+        };
+        
+        // Keyboard state
+        const keys = {
+            KeyW: false,
+            KeyA: false,
+            KeyS: false,
+            KeyD: false,
+            Space: false,
+            ShiftLeft: false
+        };
+        
+        // Initialize the game
+        async function init() {
+            // Create scene
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x87CEEB);
+            scene.fog = new THREE.FogExp2(0x87CEEB, 0.001);
+            
+            // Create camera
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 20, 0);
+            
+            // Create renderer with performance options
+            renderer = new THREE.WebGLRenderer({
+                antialias: true,
+                powerPreference: "high-performance"
+            });
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.getElementById('game-container').prepend(renderer.domElement);
+            
+            // Add pointer lock controls
+            controls = new THREE.PointerLockControls(camera, document.body);
+            
+            // Load textures with progress
+            await loadTextures();
+            
+            // Generate initial world
+            updateLoadingProgress(50, "Generating terrain...");
+            await generateWorld();
+            
+            // Add event listeners
+            setupEventListeners();
+            
+            // Hide loading screen and start game
+            updateLoadingProgress(100, "Ready!");
+            setTimeout(() => {
+                document.getElementById('loading-screen').style.display = 'none';
+                animate();
+            }, 500);
+        }
+        
+        async function loadTextures() {
+            updateLoadingProgress(10, "Loading textures...");
+            
+            // In a real game, you'd load actual textures here
+            // For this example, we'll use colored materials
+            blockTextures = {
+                grass: {
+                    top: new THREE.MeshStandardMaterial({ color: 0x88aa55 }),
+                    side: new THREE.MeshStandardMaterial({ color: 0x8b5a2b }),
+                    bottom: new THREE.MeshStandardMaterial({ color: 0x8b5a2b })
+                },
+                dirt: new THREE.MeshStandardMaterial({ color: 0x8b5a2b }),
+                stone: new THREE.MeshStandardMaterial({ color: 0x888888 }),
+                wood: {
+                    top: new THREE.MeshStandardMaterial({ color: 0x8b4513 }),
+                    side: new THREE.MeshStandardMaterial({ color: 0xa0522d }),
+                    bottom: new THREE.MeshStandardMaterial({ color: 0x8b4513 })
+                },
+                sand: new THREE.MeshStandardMaterial({ color: 0xf4a460 }),
+                leaves: new THREE.MeshStandardMaterial({ 
+                    color: 0x00aa00,
+                    transparent: true,
+                    opacity: 0.7
+                })
+            };
+            
+            // Simulate texture loading delay
+            await new Promise(resolve => setTimeout(resolve, 500));
+        }
+        
+        function updateLoadingProgress(percent, message) {
+            document.getElementById('loading-bar').style.width = `${percent}%`;
+            document.getElementById('loading-screen').firstChild.textContent = message;
+        }
+        
+        async function generateWorld() {
+            // Generate chunks around the player
+            for (let x = -settings.renderDistance; x <= settings.renderDistance; x++) {
+                for (let z = -settings.renderDistance; z <= settings.renderDistance; z++) {
+                    generateChunk(x, z);
+                }
+            }
+        }
+        
+        function generateChunk(chunkX, chunkZ) {
+            const chunkKey = `${chunkX},${chunkZ}`;
+            const chunkGroup = new THREE.Group();
+            chunkGroup.position.set(
+                chunkX * settings.chunkSize,
+                0,
+                chunkZ * settings.chunkSize
+            );
+            
+            // Generate terrain for this chunk
+            for (let x = 0; x < settings.chunkSize; x++) {
+                for (let z = 0; z < settings.chunkSize; z++) {
+                    const worldX = chunkX * settings.chunkSize + x;
+                    const worldZ = chunkZ * settings.chunkSize + z;
+                    
+                    // Base height with simple noise
+                    const height = Math.floor(
+                        settings.worldHeight * 0.5 + 
+                        Math.sin(worldX * 0.1) * 5 + 
+                        Math.cos(worldZ * 0.1) * 5
+                    );
+                    
+                    // Generate layers
+                    for (let y = 0; y <= height; y++) {
+                        let blockType;
+                        
+                        if (y === height) {
+                            blockType = 'grass';
+                        } else if (y > height - 3) {
+                            blockType = 'dirt';
+                        } else {
+                            blockType = 'stone';
+                        }
+                        
+                        addBlock(worldX, y, worldZ, blockType, false);
+                    }
+                    
+                    // Generate trees
+                    if (Math.random() < 0.02 && height > settings.worldHeight * 0.4) {
+                        generateTree(worldX, height + 1, worldZ);
+                    }
+                }
+            }
+            
+            scene.add(chunkGroup);
+            chunks[chunkKey] = chunkGroup;
+        }
+        
+        function generateTree(x, y, z) {
+            // Trunk
+            const trunkHeight = 4 + Math.floor(Math.random() * 2);
+            for (let dy = 0; dy < trunkHeight; dy++) {
+                addBlock(x, y + dy, z, 'wood', false);
+            }
+            
+            // Leaves
+            const leafRadius = 2;
+            for (let lx = -leafRadius; lx <= leafRadius; lx++) {
+                for (let lz = -leafRadius; lz <= leafRadius; lz++) {
+                    for (let ly = -leafRadius; ly <= leafRadius; ly++) {
+                        // Only place leaves in a sphere
+                        if (Math.sqrt(lx*lx + lz*lz + ly*ly) <= leafRadius + 0.5) {
+                            // Don't replace trunk
+                            if (!(lx === 0 && lz === 0 && ly < 1)) {
+                                addBlock(x + lx, y + trunkHeight + ly, z + lz, 'leaves', false);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        function addBlock(x, y, z, type, updateChunk = true) {
+            const key = `${x},${y},${z}`;
+            
+            // Don't overwrite existing blocks
+            if (world[key]) return false;
+            
+            // Create block mesh
+            let blockMesh;
+            
+            if (typeof blockTextures[type] === 'object' && blockTextures[type].top) {
+                // Different materials for each face
+                const materials = [
+                    blockTextures[type].side, // right
+                    blockTextures[type].side, // left
+                    blockTextures[type].top,  // top
+                    blockTextures[type].bottom, // bottom
+                    blockTextures[type].side, // front
+                    blockTextures[type].side  // back
+                ];
+                blockMesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), materials);
+            } else {
+                // Single material for all faces
+                blockMesh = new THREE.Mesh(
+                    new THREE.BoxGeometry(1, 1, 1),
+                    blockTextures[type]
+                );
+            }
+            
+            blockMesh.position.set(x, y, z);
+            blockMesh.castShadow = true;
+            blockMesh.receiveShadow = true;
+            
+            // Add to scene and world
+            scene.add(blockMesh);
+            world[key] = {
+                mesh: blockMesh,
+                type: type,
+                x: x,
+                y: y,
+                z: z
+            };
+            
+            // Update chunk visibility
+            if (updateChunk) {
+                updateChunkVisibility();
+            }
+            
+            return true;
+        }
+        
+        function removeBlock(x, y, z) {
+            const key = `${x},${y},${z}`;
+            if (world[key]) {
+                scene.remove(world[key].mesh);
+                delete world[key];
+                updateChunkVisibility();
+                return true;
+            }
+            return false;
+        }
+        
+        function updateChunkVisibility() {
+            const now = performance.now();
+            if (now - lastChunkUpdate < 100) return; // Limit chunk updates to every 100ms
+            lastChunkUpdate = now;
+            
+            const playerChunkX = Math.floor(camera.position.x / settings.chunkSize);
+            const playerChunkZ = Math.floor(camera.position.z / settings.chunkSize);
+            
+            // Show/hide chunks based on render distance
+            for (const [key, chunk] of Object.entries(chunks)) {
+                const [chunkX, chunkZ] = key.split(',').map(Number);
+                const distance = Math.max(
+                    Math.abs(chunkX - playerChunkX),
+                    Math.abs(chunkZ - playerChunkZ)
+                );
+                
+                chunk.visible = distance <= settings.renderDistance;
+            }
+        }
+        
+        function setupEventListeners() {
+            // Window resize
+            window.addEventListener('resize', onWindowResize);
+            
+            // Pointer lock controls
+            document.addEventListener('click', () => {
+                if (!controls.isLocked) {
+                    controls.lock();
+                }
+            });
+            
+            // Hotbar selection
+            const hotbarSlots = document.querySelectorAll('.block-slot');
+            hotbarSlots.forEach(slot => {
+                slot.addEventListener('click', () => {
+                    hotbarSlots.forEach(s => s.classList.remove('selected'));
+                    slot.classList.add('selected');
+                    selectedBlock = slot.dataset.block;
+                });
+            });
+            
+            // Mouse controls
+            document.addEventListener('mousedown', onMouseDown);
+            document.addEventListener('mouseup', onMouseUp);
+            document.addEventListener('contextmenu', (e) => e.preventDefault());
+            
+            // Keyboard controls
+            document.addEventListener('keydown', (e) => {
+                if (keys.hasOwnProperty(e.code)) {
+                    keys[e.code] = true;
+                }
+            });
+            
+            document.addEventListener('keyup', (e) => {
+                if (keys.hasOwnProperty(e.code)) {
+                    keys[e.code] = false;
+                }
+            });
+        }
+        
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+        
+        function onMouseDown(event) {
+            if (!controls.isLocked) return;
+            
+            if (event.button === 0 || event.button === 2) {
+                handleBlockInteraction(event.button === 0);
+            }
+        }
+        
+        function onMouseUp() {
+            // Could be used for continuous block breaking/placing
+        }
+        
+        function handleBlockInteraction(placeBlock) {
+            raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+            const intersects = raycaster.intersectObjects(Object.values(world).map(b => b.mesh));
+            
+            if (intersects.length > 0) {
+                const intersect = intersects[0];
+                const block = intersect.object;
+                const normal = intersect.face.normal;
+                
+                // Calculate adjacent position
+                const newPos = block.position.clone().add(normal.multiplyScalar(0.5)).add(normal.multiplyScalar(0.5));
+                const newX = Math.round(newPos.x);
+                const newY = Math.round(newPos.y);
+                const newZ = Math.round(newPos.z);
+                
+                if (placeBlock) {
+                    addBlock(newX, newY, newZ, selectedBlock);
+                } else {
+                    removeBlock(block.position.x, block.position.y, block.position.z);
+                }
+            }
+        }
+        
+        function updatePhysics() {
+            // Apply gravity
+            playerVelocity.y -= settings.gravity;
+            
+            // Check if player is on ground
+            const feetPos = new THREE.Vector3(
+                camera.position.x,
+                camera.position.y - 1.8,
+                camera.position.z
+            );
+            
+            isGrounded = false;
+            for (let y = 0; y >= -0.2; y -= 0.1) {
+                const checkPos = feetPos.clone().add(new THREE.Vector3(0, y, 0));
+                const blockKey = `${Math.round(checkPos.x)},${Math.round(checkPos.y)},${Math.round(checkPos.z)}`;
+                
+                if (world[blockKey] && !blockTypes[world[blockKey].type].transparent) {
+                    isGrounded = true;
+                    camera.position.y = Math.round(checkPos.y) + 1.8 + 0.1;
+                    playerVelocity.y = 0;
+                    break;
+                }
+            }
+            
+            // Handle jumping
+            if (keys.Space && isGrounded) {
+                playerVelocity.y = settings.jumpForce;
+                isGrounded = false;
+            }
+            
+            // Movement
+            const moveVector = new THREE.Vector3();
+            
+            if (keys.KeyW) moveVector.z -= 1;
+            if (keys.KeyS) moveVector.z += 1;
+            if (keys.KeyA) moveVector.x -= 1;
+            if (keys.KeyD) moveVector.x += 1;
+            
+            // Normalize and apply speed
+            if (moveVector.length() > 0) {
+                moveVector.normalize();
+                const speed = keys.ShiftLeft ? settings.moveSpeed * 1.5 : settings.moveSpeed;
+                moveVector.multiplyScalar(speed);
+                
+                // Apply movement direction relative to camera
+                moveVector.applyQuaternion(camera.quaternion);
+                moveVector.y = 0; // Keep movement horizontal
+                
+                playerVelocity.x = moveVector.x;
+                playerVelocity.z = moveVector.z;
+            } else {
+                // Apply friction
+                playerVelocity.x *= 0.8;
+                playerVelocity.z *= 0.8;
+            }
+            
+            // Collision detection
+            const newPos = camera.position.clone().add(playerVelocity);
+            const bodyRadius = 0.3;
+            
+            // Check for collisions in X and Z axes
+            for (let axis of ['x', 'z']) {
+                const checkPos = newPos.clone();
+                checkPos[axis] += bodyRadius * Math.sign(playerVelocity[axis]);
+                
+                const blockKey = `${Math.round(checkPos.x)},${Math.round(checkPos.y)},${Math.round(checkPos.z)}`;
+                if (world[blockKey] && !blockTypes[world[blockKey].type].transparent) {
+                    playerVelocity[axis] = 0;
+                }
+            }
+            
+            // Apply movement
+            controls.moveRight(playerVelocity.x);
+            controls.moveForward(playerVelocity.z);
+            camera.position.y += playerVelocity.y;
+            
+            // Update chunk visibility based on player position
+            updateChunkVisibility();
+        }
+        
+        function updateDebugInfo() {
+            const now = performance.now();
+            frameCount++;
+            
+            // Update FPS counter every second
+            if (now - lastFpsUpdate >= 1000) {
+                fps = Math.round(frameCount * 1000 / (now - lastFpsUpdate));
+                frameCount = 0;
+                lastFpsUpdate = now;
+                
+                document.getElementById('debug-info').innerHTML = `
+                    FPS: ${fps}<br>
+                    Position: ${camera.position.x.toFixed(1)}, ${camera.position.y.toFixed(1)}, ${camera.position.z.toFixed(1)}<br>
+                    Blocks: ${Object.keys(world).length}<br>
+                    Chunks: ${Object.keys(chunks).length}
+                `;
+            }
+        }
+        
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            const delta = clock.getDelta();
+            
+            if (controls.isLocked) {
+                updatePhysics();
+            }
+            
+            updateDebugInfo();
+            renderer.render(scene, camera);
+        }
+        
+        // Start the game
+        init();
+    </script>
+</body>
+</html>

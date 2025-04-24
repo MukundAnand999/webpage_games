@@ -1,0 +1,621 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Advanced Flight Simulator</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: linear-gradient(to bottom, #87CEEB, #E0F7FA);
+            height: 100vh;
+            font-family: Arial, sans-serif;
+        }
+        
+        #gameCanvas {
+            display: block;
+            background-color: #87CEEB;
+        }
+        
+        #controls {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background-color: rgba(255, 255, 255, 0.7);
+            padding: 10px;
+            border-radius: 5px;
+            z-index: 100;
+        }
+        
+        #hud {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background-color: rgba(255, 255, 255, 0.7);
+            padding: 10px;
+            border-radius: 5px;
+            z-index: 100;
+        }
+        
+        #login {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: rgba(255, 255, 255, 0.9);
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+            z-index: 200;
+        }
+        
+        button {
+            padding: 8px 15px;
+            margin: 5px;
+            cursor: pointer;
+        }
+        
+        #leaderboard {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            background-color: rgba(255, 255, 255, 0.7);
+            padding: 10px;
+            border-radius: 5px;
+            max-height: 150px;
+            overflow-y: auto;
+            z-index: 100;
+        }
+    </style>
+    <!-- Add Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
+</head>
+<body>
+    <div id="login">
+        <h2>Flight Simulator</h2>
+        <input type="text" id="playerName" placeholder="Enter your name" maxlength="15">
+        <button id="startGame">Start Game</button>
+    </div>
+    
+    <div id="controls" style="display: none;">
+        <h3>Controls</h3>
+        <p>↑↓ - Pitch | ←→ - Roll | Space - Fire</p>
+    </div>
+    
+    <div id="hud" style="display: none;">
+        <div>Altitude: <span id="altitudeValue">0</span> ft</div>
+        <div>Score: <span id="scoreValue">0</span></div>
+        <div>Health: <span id="healthValue">100</span>%</div>
+        <div>Ammo: <span id="ammoValue">50</span></div>
+    </div>
+    
+    <div id="leaderboard" style="display: none;">
+        <h3>Leaderboard</h3>
+        <div id="leaderboardContent"></div>
+    </div>
+    
+    <canvas id="gameCanvas"></canvas>
+    
+    <script>
+        // Firebase configuration (replace with your own)
+        const firebaseConfig = {
+            apiKey: "AIzaSyDummyAPIKeyReplaceThisWithYours",
+            authDomain: "your-project-id.firebaseapp.com",
+            databaseURL: "https://your-project-id.firebaseio.com",
+            projectId: "your-project-id",
+            storageBucket: "your-project-id.appspot.com",
+            messagingSenderId: "123456789012",
+            appId: "1:123456789012:web:abcdef1234567890"
+        };
+        
+        // Initialize Firebase
+        firebase.initializeApp(firebaseConfig);
+        const database = firebase.database();
+        
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        // Set canvas size
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        
+        // Game state
+        const game = {
+            running: false,
+            playerId: null,
+            players: {},
+            bullets: [],
+            obstacles: [],
+            clouds: [],
+            lastObstacleTime: 0,
+            lastCloudTime: 0,
+            score: 0
+        };
+        
+        // Player properties
+        const player = {
+            name: "",
+            x: canvas.width / 2,
+            y: canvas.height / 2,
+            width: 40,
+            height: 20,
+            speed: 3,
+            angle: 0,
+            altitude: 1000,
+            pitch: 0,
+            roll: 0,
+            health: 100,
+            ammo: 50,
+            lastFired: 0,
+            color: `hsl(${Math.random() * 360}, 100%, 50%)`
+        };
+        
+        // Key states
+        const keys = {
+            ArrowUp: false,
+            ArrowDown: false,
+            ArrowLeft: false,
+            ArrowRight: false,
+            " ": false
+        };
+        
+        // Event listeners
+        document.getElementById('startGame').addEventListener('click', startGame);
+        window.addEventListener('keydown', handleKeyDown);
+        window.addEventListener('keyup', handleKeyUp);
+        window.addEventListener('resize', handleResize);
+        
+        function startGame() {
+            const nameInput = document.getElementById('playerName');
+            if (nameInput.value.trim() === "") {
+                alert("Please enter your name");
+                return;
+            }
+            
+            player.name = nameInput.value.trim().substring(0, 15);
+            game.playerId = generateId();
+            
+            // Hide login, show game UI
+            document.getElementById('login').style.display = 'none';
+            document.getElementById('controls').style.display = 'block';
+            document.getElementById('hud').style.display = 'block';
+            document.getElementById('leaderboard').style.display = 'block';
+            
+            // Initialize game elements
+            initObstacles();
+            initClouds();
+            
+            // Start Firebase listeners
+            setupFirebaseListeners();
+            
+            // Start game loop
+            game.running = true;
+            gameLoop();
+        }
+        
+        function generateId() {
+            return 'xxxxxx'.replace(/[x]/g, () => {
+                return Math.floor(Math.random() * 16).toString(16);
+            });
+        }
+        
+        function setupFirebaseListeners() {
+            // Listen for other players
+            database.ref('players').on('value', (snapshot) => {
+                game.players = snapshot.val() || {};
+                
+                // Remove current player from the list
+                if (game.playerId in game.players) {
+                    delete game.players[game.playerId];
+                }
+            });
+            
+            // Listen for bullets
+            database.ref('bullets').on('value', (snapshot) => {
+                const bullets = snapshot.val() || {};
+                game.bullets = Object.values(bullets).filter(bullet => {
+                    // Filter out bullets from current player and expired bullets
+                    return bullet.playerId !== game.playerId && Date.now() - bullet.timestamp < 3000;
+                });
+            });
+            
+            // Listen for leaderboard updates
+            database.ref('leaderboard').orderByChild('score').limitToLast(10).on('value', (snapshot) => {
+                const leaderboardData = snapshot.val() || {};
+                const sorted = Object.entries(leaderboardData)
+                    .map(([id, data]) => ({ id, ...data }))
+                    .sort((a, b) => b.score - a.score);
+                
+                let leaderboardHTML = '';
+                sorted.forEach((entry, index) => {
+                    leaderboardHTML += `<div>${index + 1}. ${entry.name}: ${entry.score}</div>`;
+                });
+                
+                document.getElementById('leaderboardContent').innerHTML = leaderboardHTML;
+            });
+        }
+        
+        function updatePlayerPosition() {
+            // Only update if game is running and player is alive
+            if (!game.running || player.health <= 0) return;
+            
+            database.ref(`players/${game.playerId}`).set({
+                name: player.name,
+                x: player.x,
+                y: player.y,
+                angle: player.angle,
+                color: player.color,
+                health: player.health,
+                score: game.score,
+                timestamp: Date.now()
+            });
+        }
+        
+        function fireBullet() {
+            if (player.ammo <= 0 || Date.now() - player.lastFired < 300) return;
+            
+            player.ammo--;
+            player.lastFired = Date.now();
+            
+            const bullet = {
+                playerId: game.playerId,
+                playerName: player.name,
+                x: player.x,
+                y: player.y,
+                angle: player.angle,
+                speed: 10,
+                timestamp: Date.now()
+            };
+            
+            // Push bullet to Firebase
+            database.ref('bullets').push(bullet);
+            
+            // Update ammo display
+            document.getElementById('ammoValue').textContent = player.ammo;
+        }
+        
+        function handleKeyDown(e) {
+            if (keys.hasOwnProperty(e.key)) {
+                keys[e.key] = true;
+                e.preventDefault();
+            }
+            
+            if (e.key === " " && game.running) {
+                fireBullet();
+            }
+        }
+        
+        function handleKeyUp(e) {
+            if (keys.hasOwnProperty(e.key)) {
+                keys[e.key] = false;
+                e.preventDefault();
+            }
+        }
+        
+        function handleResize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        
+        function initObstacles() {
+            game.obstacles = [];
+            for (let i = 0; i < 10; i++) {
+                addObstacle();
+            }
+        }
+        
+        function initClouds() {
+            game.clouds = [];
+            for (let i = 0; i < 15; i++) {
+                addCloud();
+            }
+        }
+        
+        function addObstacle() {
+            game.obstacles.push({
+                x: Math.random() * canvas.width,
+                y: Math.random() * canvas.height * 0.7,
+                width: 30 + Math.random() * 50,
+                height: 30 + Math.random() * 50,
+                speed: 1 + Math.random() * 2,
+                type: Math.random() > 0.5 ? 'building' : 'mountain',
+                health: Math.random() > 0.8 ? 3 : 1 // Some obstacles take more hits
+            });
+        }
+        
+        function addCloud() {
+            game.clouds.push({
+                x: Math.random() * canvas.width,
+                y: Math.random() * canvas.height * 0.7,
+                width: 50 + Math.random() * 100,
+                height: 30 + Math.random() * 50,
+                speed: 0.5 + Math.random() * 1.5
+            });
+        }
+        
+        function gameLoop() {
+            if (!game.running) return;
+            
+            update();
+            render();
+            requestAnimationFrame(gameLoop);
+        }
+        
+        function update() {
+            // Update player controls
+            if (keys.ArrowUp) player.pitch = -2;
+            else if (keys.ArrowDown) player.pitch = 2;
+            else player.pitch *= 0.9;
+            
+            if (keys.ArrowLeft) player.roll = -3;
+            else if (keys.ArrowRight) player.roll = 3;
+            else player.roll *= 0.9;
+            
+            // Update player angle based on roll
+            player.angle += player.roll * 0.02;
+            
+            // Update player position based on angle and pitch
+            player.x += Math.sin(player.angle) * player.speed;
+            player.y += player.pitch * 0.5;
+            
+            // Update altitude based on pitch
+            player.altitude += player.pitch * 5;
+            if (player.altitude < 0) player.altitude = 0;
+            
+            // Wrap around screen edges
+            if (player.x < 0) player.x = canvas.width;
+            if (player.x > canvas.width) player.x = 0;
+            if (player.y < 0) player.y = canvas.height;
+            if (player.y > canvas.height) player.y = 0;
+            
+            // Update obstacles
+            for (let i = game.obstacles.length - 1; i >= 0; i--) {
+                const obstacle = game.obstacles[i];
+                obstacle.x -= obstacle.speed;
+                
+                // Remove obstacles that are off screen
+                if (obstacle.x + obstacle.width < 0) {
+                    game.obstacles.splice(i, 1);
+                    game.score += 10; // Score for avoiding obstacles
+                    continue;
+                }
+                
+                // Check for collision with player
+                if (player.health > 0 && checkCollision(player, obstacle)) {
+                    player.health -= 10;
+                    if (player.health <= 0) {
+                        player.health = 0;
+                        gameOver();
+                    }
+                    document.getElementById('healthValue').textContent = player.health;
+                }
+            }
+            
+            // Add new obstacles periodically
+            if (Date.now() - game.lastObstacleTime > 2000) {
+                addObstacle();
+                game.lastObstacleTime = Date.now();
+            }
+            
+            // Update clouds
+            for (let i = game.clouds.length - 1; i >= 0; i--) {
+                const cloud = game.clouds[i];
+                cloud.x -= cloud.speed;
+                
+                if (cloud.x + cloud.width < 0) {
+                    game.clouds.splice(i, 1);
+                    addCloud();
+                }
+            }
+            
+            // Update bullets (local and from Firebase)
+            for (let i = game.bullets.length - 1; i >= 0; i--) {
+                const bullet = game.bullets[i];
+                bullet.x += Math.sin(bullet.angle) * bullet.speed;
+                bullet.y += Math.cos(bullet.angle) * bullet.speed;
+                
+                // Check if bullet is out of bounds
+                if (bullet.x < 0 || bullet.x > canvas.width || 
+                    bullet.y < 0 || bullet.y > canvas.height) {
+                    game.bullets.splice(i, 1);
+                    continue;
+                }
+                
+                // Check for bullet hitting obstacles
+                for (let j = game.obstacles.length - 1; j >= 0; j--) {
+                    const obstacle = game.obstacles[j];
+                    if (checkBulletCollision(bullet, obstacle)) {
+                        obstacle.health--;
+                        if (obstacle.health <= 0) {
+                            game.obstacles.splice(j, 1);
+                            game.score += 50; // More points for destroying obstacles
+                            document.getElementById('scoreValue').textContent = game.score;
+                        }
+                        
+                        // Remove the bullet
+                        game.bullets.splice(i, 1);
+                        break;
+                    }
+                }
+                
+                // Check for bullet hitting other players
+                for (const [id, otherPlayer] of Object.entries(game.players)) {
+                    if (bullet.playerId !== id && checkBulletCollision(bullet, otherPlayer)) {
+                        // In a real game, you'd notify the other player they've been hit
+                        game.score += 100; // Points for hitting another player
+                        document.getElementById('scoreValue').textContent = game.score;
+                        game.bullets.splice(i, 1);
+                        break;
+                    }
+                }
+            }
+            
+            // Update HUD
+            document.getElementById('altitudeValue').textContent = Math.floor(player.altitude);
+            document.getElementById('scoreValue').textContent = game.score;
+            
+            // Update player position in Firebase
+            updatePlayerPosition();
+        }
+        
+        function checkCollision(obj1, obj2) {
+            return obj1.x < obj2.x + obj2.width &&
+                   obj1.x + player.width > obj2.x &&
+                   obj1.y < obj2.y + obj2.height &&
+                   obj1.y + player.height > obj2.y;
+        }
+        
+        function checkBulletCollision(bullet, target) {
+            const bulletSize = 5;
+            return bullet.x < target.x + target.width &&
+                   bullet.x + bulletSize > target.x &&
+                   bullet.y < target.y + target.height &&
+                   bullet.y + bulletSize > target.y;
+        }
+        
+        function gameOver() {
+            game.running = false;
+            
+            // Update leaderboard
+            database.ref(`leaderboard/${game.playerId}`).set({
+                name: player.name,
+                score: game.score,
+                timestamp: Date.now()
+            });
+            
+            alert(`Game Over! Your score: ${game.score}`);
+        }
+        
+        function render() {
+            // Clear canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // Draw sky gradient
+            const skyGradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+            skyGradient.addColorStop(0, '#87CEEB');
+            skyGradient.addColorStop(1, '#E0F7FA');
+            ctx.fillStyle = skyGradient;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // Draw clouds
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+            for (let cloud of game.clouds) {
+                ctx.beginPath();
+                ctx.ellipse(cloud.x, cloud.y, cloud.width, cloud.height, 0, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            
+            // Draw ground (based on altitude)
+            const groundHeight = Math.min(100, 1000 / (player.altitude / 100 + 1));
+            ctx.fillStyle = '#4CAF50';
+            ctx.fillRect(0, canvas.height - groundHeight, canvas.width, groundHeight);
+            
+            // Draw obstacles
+            for (let obstacle of game.obstacles) {
+                ctx.fillStyle = obstacle.type === 'building' ? '#795548' : '#8D6E63';
+                ctx.fillRect(obstacle.x, canvas.height - obstacle.height - groundHeight, 
+                            obstacle.width, obstacle.height);
+                
+                // Draw windows on buildings
+                if (obstacle.type === 'building') {
+                    ctx.fillStyle = '#FFEB3B';
+                    const windowSize = 5;
+                    const windowSpacing = 10;
+                    
+                    for (let y = canvas.height - groundHeight - obstacle.height + 10; 
+                         y < canvas.height - groundHeight - 10; 
+                         y += windowSpacing) {
+                        for (let x = obstacle.x + 10; x < obstacle.x + obstacle.width - 10; x += windowSpacing) {
+                            if (Math.random() > 0.3) { // Not all windows are lit
+                                ctx.fillRect(x, y, windowSize, windowSize);
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Draw other players
+            for (const [id, otherPlayer] of Object.entries(game.players)) {
+                // Only draw if player data is recent (last 5 seconds)
+                if (Date.now() - otherPlayer.timestamp < 5000) {
+                    ctx.save();
+                    ctx.translate(otherPlayer.x, otherPlayer.y);
+                    ctx.rotate(otherPlayer.angle);
+                    
+                    // Draw plane
+                    ctx.fillStyle = otherPlayer.color;
+                    ctx.beginPath();
+                    ctx.moveTo(20, 0);
+                    ctx.lineTo(-20, -10);
+                    ctx.lineTo(-20, 10);
+                    ctx.closePath();
+                    ctx.fill();
+                    
+                    // Draw wings
+                    ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+                    ctx.fillRect(-10, -20, 20, 30);
+                    
+                    ctx.restore();
+                    
+                    // Draw player name
+                    ctx.fillStyle = 'black';
+                    ctx.font = '12px Arial';
+                    ctx.fillText(otherPlayer.name, otherPlayer.x - 20, otherPlayer.y - 15);
+                }
+            }
+            
+            // Draw bullets
+            ctx.fillStyle = 'yellow';
+            for (let bullet of game.bullets) {
+                ctx.beginPath();
+                ctx.arc(bullet.x, bullet.y, 5, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            
+            // Draw current player (if alive)
+            if (player.health > 0) {
+                ctx.save();
+                ctx.translate(player.x, player.y);
+                ctx.rotate(player.angle);
+                
+                // Draw plane
+                ctx.fillStyle = player.color;
+                ctx.beginPath();
+                ctx.moveTo(20, 0);
+                ctx.lineTo(-20, -10);
+                ctx.lineTo(-20, 10);
+                ctx.closePath();
+                ctx.fill();
+                
+                // Draw wings
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+                ctx.fillRect(-10, -20, 20, 30);
+                
+                ctx.restore();
+                
+                // Draw player name
+                ctx.fillStyle = 'black';
+                ctx.font = '12px Arial';
+                ctx.fillText(player.name, player.x - 20, player.y - 15);
+            }
+            
+            // Draw game over screen if player is dead
+            if (player.health <= 0) {
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                
+                ctx.fillStyle = 'white';
+                ctx.font = '48px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText('GAME OVER', canvas.width / 2, canvas.height / 2);
+                ctx.font = '24px Arial';
+                ctx.fillText(`Score: ${game.score}`, canvas.width / 2, canvas.height / 2 + 40);
+                ctx.fillText('Refresh to play again', canvas.width / 2, canvas.height / 2 + 80);
+                ctx.textAlign = 'left';
+            }
+        }
+    </script>
+</body>
+</html>

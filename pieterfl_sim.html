@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fly Like Pieter</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: linear-gradient(to bottom, #87CEEB, #E0F7FA);
+            height: 100vh;
+            font-family: 'Arial', sans-serif;
+            touch-action: manipulation;
+        }
+        
+        #gameCanvas {
+            display: block;
+        }
+        
+        #startScreen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            z-index: 100;
+        }
+        
+        #gameUI {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            font-size: 24px;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
+            z-index: 10;
+        }
+        
+        button {
+            background: #FF5722;
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            font-size: 20px;
+            border-radius: 50px;
+            margin-top: 20px;
+            cursor: pointer;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+            transition: all 0.2s;
+        }
+        
+        button:hover {
+            background: #FF7043;
+            transform: scale(1.05);
+        }
+        
+        h1 {
+            font-size: 48px;
+            margin-bottom: 10px;
+            text-shadow: 3px 3px 6px rgba(0, 0, 0, 0.5);
+        }
+        
+        p {
+            font-size: 18px;
+            max-width: 80%;
+            text-align: center;
+        }
+        
+        #restartScreen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            display: none;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            z-index: 100;
+        }
+    </style>
+</head>
+<body>
+    <div id="gameUI">
+        Score: <span id="score">0</span> | 
+        Stars: <span id="stars">0</span>
+    </div>
+    
+    <div id="startScreen">
+        <h1>Fly Like Pieter</h1>
+        <p>Guide your paper airplane through the city, collect stars, and avoid obstacles!</p>
+        <button id="startButton">Start Flying</button>
+    </div>
+    
+    <div id="restartScreen">
+        <h1>Game Over</h1>
+        <p>Your score: <span id="finalScore">0</span></p>
+        <p>Stars collected: <span id="finalStars">0</span></p>
+        <button id="restartButton">Fly Again</button>
+    </div>
+    
+    <canvas id="gameCanvas"></canvas>
+    
+    <script>
+        // Game elements
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const startScreen = document.getElementById('startScreen');
+        const restartScreen = document.getElementById('restartScreen');
+        const startButton = document.getElementById('startButton');
+        const restartButton = document.getElementById('restartButton');
+        const scoreElement = document.getElementById('score');
+        const starsElement = document.getElementById('stars');
+        const finalScoreElement = document.getElementById('finalScore');
+        const finalStarsElement = document.getElementById('finalStars');
+        
+        // Set canvas size
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        resizeCanvas();
+        window.addEventListener('resize', resizeCanvas);
+        
+        // Game variables
+        let score = 0;
+        let starsCollected = 0;
+        let gameSpeed = 2;
+        let gameRunning = false;
+        let animationFrameId;
+        
+        // Player (paper airplane)
+        const player = {
+            x: 100,
+            y: canvas.height / 2,
+            width: 40,
+            height: 30,
+            speedY: 0,
+            gravity: 0.2,
+            lift: -5,
+            rotation: 0
+        };
+        
+        // Game elements
+        let buildings = [];
+        let stars = [];
+        let clouds = [];
+        let obstacles = [];
+        
+        // Control variables
+        let isTouching = false;
+        let touchStartY = 0;
+        
+        // Event listeners
+        startButton.addEventListener('click', startGame);
+        restartButton.addEventListener('click', restartGame);
+        
+        // Touch/mouse controls
+        canvas.addEventListener('mousedown', handleInputStart);
+        canvas.addEventListener('touchstart', handleInputStart);
+        canvas.addEventListener('mouseup', handleInputEnd);
+        canvas.addEventListener('touchend', handleInputEnd);
+        document.addEventListener('keydown', (e) => {
+            if (e.code === 'Space') handleInputStart();
+        });
+        document.addEventListener('keyup', (e) => {
+            if (e.code === 'Space') handleInputEnd();
+        });
+        
+        function handleInputStart(e) {
+            if (!gameRunning) return;
+            isTouching = true;
+            player.speedY = player.lift;
+            
+            if (e && e.touches) {
+                touchStartY = e.touches[0].clientY;
+            }
+        }
+        
+        function handleInputEnd(e) {
+            isTouching = false;
+            
+            if (e && e.changedTouches) {
+                const touchEndY = e.changedTouches[0].clientY;
+                // Add extra lift for swipe up
+                if (touchStartY - touchEndY > 20) {
+                    player.speedY = player.lift * 1.5;
+                }
+            }
+        }
+        
+        function startGame() {
+            startScreen.style.display = 'none';
+            score = 0;
+            starsCollected = 0;
+            gameSpeed = 2;
+            
+            // Reset player
+            player.x = 100;
+            player.y = canvas.height / 2;
+            player.speedY = 0;
+            player.rotation = 0;
+            
+            // Clear all elements
+            buildings = [];
+            stars = [];
+            clouds = [];
+            obstacles = [];
+            
+            // Initial elements
+            generateInitialElements();
+            
+            gameRunning = true;
+            updateUI();
+            gameLoop();
+        }
+        
+        function restartGame() {
+            restartScreen.style.display = 'none';
+            startGame();
+        }
+        
+        function gameOver() {
+            gameRunning = false;
+            finalScoreElement.textContent = score;
+            finalStarsElement.textContent = starsCollected;
+            restartScreen.style.display = 'flex';
+            cancelAnimationFrame(animationFrameId);
+        }
+        
+        function generateInitialElements() {
+            // Initial buildings
+            for (let i = 0; i < 10; i++) {
+                createBuilding(canvas.width + (i * 300));
+            }
+            
+            // Initial clouds
+            for (let i = 0; i < 5; i++) {
+                createCloud(Math.random() * canvas.width * 2);
+            }
+        }
+        
+        function createBuilding(x) {
+            const height = 100 + Math.random() * (canvas.height / 2);
+            const width = 60 + Math.random() * 100;
+            
+            buildings.push({
+                x: x,
+                y: canvas.height - height,
+                width: width,
+                height: height,
+                color: `hsl(${Math.floor(Math.random() * 60) + 200}, 70%, ${Math.floor(Math.random() * 30) + 40}%)`
+            });
+            
+            // Sometimes add a star on top
+            if (Math.random() > 0.7) {
+                stars.push({
+                    x: x + width / 2 - 10,
+                    y: canvas.height - height - 30,
+                    width: 20,
+                    height: 20,
+                    collected: false
+                });
+            }
+            
+            // Sometimes add an obstacle (birds)
+            if (Math.random() > 0.8) {
+                obstacles.push({
+                    x: x + width + 50,
+                    y: canvas.height - height - 50 - Math.random() * 100,
+                    width: 30,
+                    height: 20,
+                    speed: 1 + Math.random() * 2
+                });
+            }
+        }
+        
+        function createCloud(x) {
+            clouds.push({
+                x: x,
+                y: 50 + Math.random() * (canvas.height / 3),
+                width: 80 + Math.random() * 100,
+                height: 40 + Math.random() * 60,
+                speed: 0.5 + Math.random() * 1
+            });
+        }
+        
+        function updateUI() {
+            scoreElement.textContent = score;
+            starsElement.textContent = starsCollected;
+        }
+        
+        function gameLoop() {
+            if (!gameRunning) return;
+            
+            update();
+            render();
+            animationFrameId = requestAnimationFrame(gameLoop);
+        }
+        
+        function update() {
+            // Increase score over time
+            score += Math.floor(gameSpeed / 2);
+            
+            // Increase difficulty
+            gameSpeed += 0.001;
+            
+            // Update player
+            if (isTouching) {
+                player.speedY = player.lift;
+            } else {
+                player.speedY += player.gravity;
+            }
+            
+            player.y += player.speedY;
+            
+            // Rotate plane based on speed
+            player.rotation = player.speedY * 0.1;
+            
+            // Check boundaries
+            if (player.y < 0) {
+                player.y = 0;
+                player.speedY = 0;
+            }
+            
+            if (player.y + player.height > canvas.height) {
+                gameOver();
+                return;
+            }
+            
+            // Update buildings
+            for (let i = buildings.length - 1; i >= 0; i--) {
+                buildings[i].x -= gameSpeed;
+                
+                // Remove off-screen buildings and create new ones
+                if (buildings[i].x + buildings[i].width < 0) {
+                    buildings.splice(i, 1);
+                    createBuilding(canvas.width + Math.random() * 200);
+                }
+                
+                // Check collision
+                if (checkCollision(player, buildings[i])) {
+                    gameOver();
+                    return;
+                }
+            }
+            
+            // Update stars
+            for (let i = stars.length - 1; i >= 0; i--) {
+                stars[i].x -= gameSpeed;
+                
+                // Remove off-screen stars
+                if (stars[i].x + stars[i].width < 0) {
+                    stars.splice(i, 1);
+                    continue;
+                }
+                
+                // Check collection
+                if (!stars[i].collected && checkCollision(player, stars[i])) {
+                    stars[i].collected = true;
+                    starsCollected++;
+                    score += 100;
+                    updateUI();
+                }
+            }
+            
+            // Update clouds
+            for (let i = clouds.length - 1; i >= 0; i--) {
+                clouds[i].x -= clouds[i].speed;
+                
+                // Remove off-screen clouds and create new ones
+                if (clouds[i].x + clouds[i].width < 0) {
+                    clouds.splice(i, 1);
+                    createCloud(canvas.width + Math.random() * 500);
+                }
+            }
+            
+            // Update obstacles
+            for (let i = obstacles.length - 1; i >= 0; i--) {
+                obstacles[i].x -= obstacles[i].speed + gameSpeed * 0.5;
+                
+                // Remove off-screen obstacles
+                if (obstacles[i].x + obstacles[i].width < 0) {
+                    obstacles.splice(i, 1);
+                    continue;
+                }
+                
+                // Check collision
+                if (checkCollision(player, obstacles[i])) {
+                    gameOver();
+                    return;
+                }
+            }
+            
+            updateUI();
+        }
+        
+        function checkCollision(obj1, obj2) {
+            return obj1.x < obj2.x + obj2.width &&
+                   obj1.x + obj1.width > obj2.x &&
+                   obj1.y < obj2.y + obj2.height &&
+                   obj1.y + obj1.height > obj2.y;
+        }
+        
+        function render() {
+            // Clear canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // Draw sky gradient
+            const skyGradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+            skyGradient.addColorStop(0, '#87CEEB');
+            skyGradient.addColorStop(1, '#E0F7FA');
+            ctx.fillStyle = skyGradient;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // Draw clouds
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+            for (let cloud of clouds) {
+                ctx.beginPath();
+                ctx.ellipse(
+                    cloud.x + cloud.width / 2, 
+                    cloud.y + cloud.height / 2, 
+                    cloud.width / 2, 
+                    cloud.height / 2, 
+                    0, 0, Math.PI * 2
+                );
+                ctx.fill();
+            }
+            
+            // Draw buildings
+            for (let building of buildings) {
+                // Building
+                ctx.fillStyle = building.color;
+                ctx.fillRect(building.x, building.y, building.width, building.height);
+                
+                // Windows
+                ctx.fillStyle = 'rgba(255, 255, 0, 0.7)';
+                const windowSize = 8;
+                const windowSpacing = 15;
+                const offsetX = 10;
+                const offsetY = 15;
+                
+                for (let y = building.y + offsetY; y < building.y + building.height - 10; y += windowSpacing) {
+                    for (let x = building.x + offsetX; x < building.x + building.width - 10; x += windowSpacing) {
+                        if (Math.random() > 0.3) { // Random windows
+                            ctx.fillRect(x, y, windowSize, windowSize);
+                        }
+                    }
+                }
+            }
+            
+            // Draw stars
+            for (let star of stars) {
+                if (!star.collected) {
+                    ctx.save();
+                    ctx.translate(star.x + star.width / 2, star.y + star.height / 2);
+                    
+                    // Star shape
+                    ctx.fillStyle = '#FFEB3B';
+                    ctx.beginPath();
+                    for (let i = 0; i < 5; i++) {
+                        ctx.lineTo(0, star.height / 2);
+                        ctx.rotate((Math.PI * 2) / 5);
+                        ctx.lineTo(0, star.height / 4);
+                        ctx.rotate((Math.PI * 2) / 5);
+                    }
+                    ctx.closePath();
+                    ctx.fill();
+                    
+                    // Glow effect
+                    ctx.shadowColor = '#FFEB3B';
+                    ctx.shadowBlur = 10;
+                    ctx.fill();
+                    
+                    ctx.restore();
+                }
+            }
+            
+            // Draw obstacles (birds)
+            for (let obstacle of obstacles) {
+                ctx.save();
+                ctx.translate(obstacle.x + obstacle.width / 2, obstacle.y + obstacle.height / 2);
+                
+                // Bird body
+                ctx.fillStyle = '#795548';
+                ctx.beginPath();
+                ctx.ellipse(0, 0, obstacle.width / 2, obstacle.height / 2, 0, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // Wings
+                ctx.fillStyle = '#5D4037';
+                ctx.beginPath();
+                ctx.moveTo(0, 0);
+                ctx.lineTo(-obstacle.width / 2, -obstacle.height / 2);
+                ctx.lineTo(-obstacle.width, 0);
+                ctx.closePath();
+                ctx.fill();
+                
+                ctx.beginPath();
+                ctx.moveTo(0, 0);
+                ctx.lineTo(-obstacle.width / 2, obstacle.height / 2);
+                ctx.lineTo(-obstacle.width, 0);
+                ctx.closePath();
+                ctx.fill();
+                
+                ctx.restore();
+            }
+            
+            // Draw player (paper airplane)
+            ctx.save();
+            ctx.translate(player.x + player.width / 2, player.y + player.height / 2);
+            ctx.rotate(player.rotation);
+            
+            // Paper airplane body
+            ctx.fillStyle = '#F5F5F5';
+            ctx.beginPath();
+            ctx.moveTo(player.width / 2, 0);
+            ctx.lineTo(-player.width / 2, -player.height / 2);
+            ctx.lineTo(-player.width / 4, 0);
+            ctx.lineTo(-player.width / 2, player.height / 2);
+            ctx.closePath();
+            ctx.fill();
+            
+            // Fold lines
+            ctx.strokeStyle = '#BDBDBD';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(player.width / 2, 0);
+            ctx.lineTo(-player.width / 4, 0);
+            ctx.stroke();
+            
+            ctx.restore();
+        }
+    </script>
+</body>
+</html>
